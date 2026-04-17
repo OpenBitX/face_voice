@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Talking Face · Lip Sync Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+         margin: 0; padding: 28px 20px; background: #0b0c11; color: #e8e8ef; }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  p.sub { margin: 0 0 18px; color: #8b91a3; font-size: 13px; }
+
+  /* 舞台 = 背景图 + 上面眼睛视频 + 下面嘴型 PNG。
+     眼睛/嘴巴源视频背景是纯黑，用 mix-blend-mode: screen 让黑色自动透明，
+     面部五官直接"贴"在背景图上，形成物品成精效果。 */
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 16/9;
+    background: #0b0c11 center/cover no-repeat;
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+  /* 眼睛视频：VP9+alpha webm，已真透明，无需 blend-mode；
+     mp4 作为 Safari 兜底。比例控制在合理的"脸部"大小。 */
+  #eyes {
+    position: absolute;
+    top: 18%; left: 50%;
+    width: 38%;
+    transform: translateX(-50%);
+    display: block;
+  }
+  /* 嘴型 canvas：PNG 本身已有 alpha 通道，canvas 原生支持；
+     放在眼睛下方适当位置，尺寸贴近真实脸部比例。 */
+  #mouth-layer {
+    position: absolute;
+    bottom: 18%; left: 50%;
+    width: 24%; height: 22%;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  /* 高精度 Replicate 完整脸，正常不透明铺满 */
+  #hq {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; background: #000; display: none;
+  }
+  /* 背景快捷按钮区 */
+  .bg-bar {
+    margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;
+    align-items: center; font-size: 12px; color: #9aa0b4;
+  }
+  .bg-bar button.preset {
+    border: 1px solid #2a2d3d; background: #1a1c28; color: #cfd4e4;
+    padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 500;
+  }
+  .bg-bar input[type=file] {
+    color: #9aa0b4; font-size: 12px; padding: 6px;
+    background: #1a1c28; border: 1px dashed #2a2d3d;
+    border-radius: 8px; cursor: pointer; width: auto;
+  }
+  .badge {
+    position: absolute; top: 10px; right: 10px;
+    background: rgba(0,0,0,.6); color: #b7f5c7; font-size: 12px;
+    padding: 4px 10px; border-radius: 999px; backdrop-filter: blur(6px);
+    z-index: 3;
+  }
+  .badge.err  { color: #ffb4b4; }
+  .badge.warn { color: #ffd66e; }
+
+  .panel { margin-top: 16px; background: #171922; border-radius: 12px;
+           padding: 14px 16px; border: 1px solid #252838; }
+  label { font-size: 12px; color: #9aa0b4; display: block; margin: 8px 0 4px; }
+  textarea, input, select {
+    width: 100%; background: #0b0c11; color: #e8e8ef;
+    border: 1px solid #2a2d3d; border-radius: 8px;
+    padding: 9px 11px; font-size: 14px; font-family: inherit;
+  }
+  textarea { min-height: 70px; resize: vertical; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  button {
+    border: 0; border-radius: 10px; padding: 12px; font-size: 15px;
+    font-weight: 600; cursor: pointer; transition: transform .08s; color: #fff;
+  }
+  button:active { transform: scale(.98); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-fast  { background: linear-gradient(135deg,#3c7afa,#6d5ef5); }
+  .btn-hq    { background: linear-gradient(135deg,#b04ffa,#fa3c9d); }
+  .status { margin-top: 10px; font-size: 12px; color: #9aa0b4; min-height: 16px; }
+  .status.err  { color: #ff8888; }
+  .status.warn { color: #ffd66e; }
+  kbd { background: #272a3b; border-radius: 4px; padding: 1px 6px;
+        font-size: 11px; color: #cfd4e4; }
+  .mode-select { display: inline-flex; gap: 4px; margin-top: 4px; }
+  .mode-select label { padding: 4px 10px; border: 1px solid #2a2d3d;
+                       border-radius: 999px; cursor: pointer; font-size: 12px;
+                       color: #9aa0b4; margin: 0; }
+  .mode-select input { display: none; }
+  .mode-select input:checked + span {
+    color: #fff;
+  }
+  .mode-select label:has(input:checked) {
+    background: #2a2d3d; color: #fff;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🗣️ 会说话的脸 · Lip Sync Demo</h1>
+  <p class="sub">
+    眼睛视频 + 17 张真实嘴型 PNG → <code>mix-blend-mode: screen</code> 让黑色透明 → 贴在任意背景图上"物品成精"<br>
+    <b>A · 实时</b>：TTS + 本地音素分析 → 切嘴型 PNG，延迟 &lt;500ms；<b>B · 高精度</b>：Replicate Wav2Lip，~30-90s<br>
+    按 <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 触发快速模式
+  </p>
+
+  <div class="stage" id="stage">
+    <video id="eyes" muted loop playsinline preload="auto">
+      <source src="/eyes.webm" type="video/webm" />
+      <source src="/eyes.mp4"  type="video/mp4" />
+    </video>
+    <canvas id="mouth-layer"></canvas>
+    <video id="hq" playsinline preload="auto"></video>
+    <span id="badge" class="badge" style="display:none">idle</span>
+  </div>
+
+  <div class="bg-bar">
+    <span>背景：</span>
+    <button class="preset" data-bg="apple">🍎 苹果</button>
+    <button class="preset" data-bg="cup">☕ 咖啡杯</button>
+    <button class="preset" data-bg="sky">🌅 天空</button>
+    <button class="preset" data-bg="none">✖ 纯黑</button>
+    <input type="file" id="bgUpload" accept="image/*" />
+  </div>
+
+  <div class="panel">
+    <label>要说的话</label>
+    <textarea id="text">哎呦你干嘛~ 这个苹果居然会说话！哈哈哈哈！</textarea>
+
+    <div class="row">
+      <div>
+        <label>Edge TTS 声音（Fish 无效时回落）</label>
+        <select id="voice">
+          <option value="zh-CN-YunxiNeural">云希 · 少年男声（活泼）</option>
+          <option value="zh-CN-YunyangNeural">云扬 · 热情男声</option>
+          <option value="zh-CN-XiaoyiNeural">晓伊 · 可爱女声</option>
+          <option value="zh-CN-XiaoxiaoNeural">晓晓 · 情感丰富</option>
+          <option value="zh-CN-liaoning-XiaobeiNeural">晓北 · 东北话 (funny)</option>
+          <option value="zh-CN-shaanxi-XiaoniNeural">晓妮 · 陕西话 (funny)</option>
+        </select>
+      </div>
+      <div>
+        <label>Fish Audio reference_id（可选）</label>
+        <input id="ref" type="text" placeholder="去 fish.audio 复制一个声音 ID" />
+      </div>
+    </div>
+
+    <label style="margin-top:8px;">嘴型驱动（实时模式）</label>
+    <div class="mode-select">
+      <label><input type="radio" name="lipmode" value="phoneme" checked><span>截图嘴型 PNG（真实嘴型）</span></label>
+      <label><input type="radio" name="lipmode" value="amp"><span>振幅几何图形（备用）</span></label>
+    </div>
+
+    <div class="btns">
+      <button id="go"  class="btn-fast">▶ 实时说话（免费）</button>
+      <button id="hqgo" class="btn-hq">✨ 高精度唇形（Replicate）</button>
+    </div>
+    <div id="status" class="status"></div>
+  </div>
+</div>
+
+<audio id="tts" preload="auto"></audio>
+
+<script>
+/*
+ * 两条主线：
+ *   fast():   即时合成 mp3 → 本地分析 → 画面上用 canvas 叠加嘴型图（或根据振幅直接绘制）
+ *   hq():     POST /lipsync → 等 Replicate 返回 mp4 → 替换播放
+ *
+ * 嘴型层（canvas）叠在 face.mp4 上方：
+ *   - amp 模式: 画一个椭圆嘴（纯代码）
+ *   - phoneme 模式: 切换 /static/mouths/shape-{A..H}.png
+ */
+
+const eyes = document.getElementById('eyes');
+const hq   = document.getElementById('hq');
+const stage = document.getElementById('stage');
+const audio= document.getElementById('tts');
+const btn  = document.getElementById('go');
+const hqBtn= document.getElementById('hqgo');
+const statusEl = document.getElementById('status');
+const badge = document.getElementById('badge');
+const canvas = document.getElementById('mouth-layer');
+const ctx = canvas.getContext('2d');
+
+function setStatus(msg, kind='') {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (kind ? ' ' + kind : '');
+}
+function showBadge(msg, kind='') {
+  badge.textContent = msg;
+  badge.style.display = 'inline-block';
+  badge.className = 'badge' + (kind ? ' ' + kind : '');
+}
+function hideBadge() { badge.style.display = 'none'; }
+function getLipMode() {
+  return document.querySelector('input[name=lipmode]:checked').value;
+}
+
+/* ---- 嘴型 PNG 预加载（9 张：A-H 发音态 + X 休息态） ---- */
+const SHAPES = ['A','B','C','D','E','F','G','H','X'];
+const mouthImgs = {};
+let mouthsReady = false;
+async function preloadMouths() {
+  let ok = 0;
+  await Promise.all(SHAPES.map(s => new Promise(res => {
+    const im = new Image();
+    im.onload  = () => { mouthImgs[s] = im; ok++; res(); };
+    im.onerror = () => { res(); };
+    im.src = `/static/mouths/shape-${s}.png`;
+  })));
+  mouthsReady = ok >= 6;
+  return mouthsReady;
+}
+preloadMouths().then(ok => {
+  if (!ok) setStatus('提示：/static/mouths/ 素材未就绪，音素模式暂不可用；振幅模式可直接用', 'warn');
+  else drawShape('X');  // 默认显示闭嘴态
+});
+
+/* ---- 音素 → 嘴型 映射（简化版 Rhubarb） ----
+ * 不用 WASM，而是用浏览器自带 MediaDevices 不可行（需要离线文件）。
+ * 这里直接用**频谱特征**粗分类到 A-H 之一，足够 demo。
+ *
+ * 思路：对每帧计算:
+ *   - rms (音量)
+ *   - centroid (频谱重心 → 区分开口度)
+ *   - zcr (过零率 → 区分摩擦/爆破)
+ * 然后映射到嘴型。
+ */
+/* 9 个嘴型的分类映射（简化 Rhubarb 思路）：
+ * X=静默, A=闭合, B=齿微开, C=中开笑, D=大张(啊), E=圆中开(哦),
+ * F=极圆(呜), G=唇齿(F/V), H=半张(L 舌位)
+ */
+function classifyShape(rms, centroid, freqMids) {
+  if (rms < 0.02) return 'X';
+  if (rms < 0.06) return 'A';         // 微声/闭嘴
+  if (centroid > 0.55) {
+    if (rms > 0.18) return 'C';       // 高频 + 大声 → 诶
+    return 'B';                       // 高频 + 小声 → S/T
+  }
+  if (centroid < 0.25) {
+    if (rms > 0.20) return 'D';       // 低频 + 大声 → 啊
+    return 'F';                       // 低频 + 小声 → 呜
+  }
+  if (freqMids > 0.5) return 'E';     // 中频高能 → 哦
+  if (rms > 0.25) return 'D';
+  return 'C';
+}
+
+/* ---- Canvas 画嘴 ---- */
+function resizeCanvas() {
+  const r = canvas.getBoundingClientRect();
+  canvas.width = r.width;
+  canvas.height = r.height;
+}
+new ResizeObserver(resizeCanvas).observe(canvas);
+resizeCanvas();
+
+/* canvas 现在是舞台下半（约 52% 高度），嘴型放大居中占满 */
+function drawAmpMouth(amp) {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const cx = W * 0.5, cy = H * 0.5;
+  const mw = W * (0.45 + amp * 0.18);
+  const mh = Math.max(10, H * (0.15 + amp * 0.55));
+  ctx.fillStyle = 'rgba(30,10,15,.88)';
+  ctx.strokeStyle = 'rgba(20,20,20,.95)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, mw/2, mh/2, 0, 0, Math.PI*2);
+  ctx.fill(); ctx.stroke();
+  if (mh > 40) {
+    ctx.fillStyle = '#e86a84';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + mh/6, mw*0.3, mh*0.25, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function drawShape(letter) {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const img = mouthImgs[letter] || mouthImgs['X'] || mouthImgs['A'];
+  if (!img) return;
+  // 嘴型放大到占舞台下半区的大约 95%，保持比例居中
+  const maxW = W * 0.95;
+  const maxH = H * 0.96;
+  const scale = Math.min(maxW / img.width, maxH / img.height);
+  const w = img.width * scale, h = img.height * scale;
+  ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+}
+
+/* ---- 实时模式 ---- */
+let audioCtx, analyser, rafId, freqBuf, timeBuf;
+let ema = 0;
+
+function startAnalysis() {
+  if (audioCtx) { try { audioCtx.close(); } catch {} audioCtx = null; }
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = audioCtx.createMediaElementSource(audio);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  src.connect(analyser);
+  analyser.connect(audioCtx.destination);
+  freqBuf = new Uint8Array(analyser.frequencyBinCount);
+  timeBuf = new Uint8Array(analyser.fftSize);
+}
+function stopAnalysis() {
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function analyseFrame() {
+  analyser.getByteTimeDomainData(timeBuf);
+  analyser.getByteFrequencyData(freqBuf);
+
+  let s = 0;
+  for (let i = 0; i < timeBuf.length; i++) {
+    const v = (timeBuf[i] - 128) / 128; s += v * v;
+  }
+  const rms = Math.sqrt(s / timeBuf.length);
+  const amp = Math.min(1, Math.pow(rms * 3.5, 0.6));
+  ema = 0.55 * amp + 0.45 * ema;
+
+  // 频谱重心 & 中频能量
+  let total = 0, weighted = 0, mids = 0;
+  for (let i = 0; i < freqBuf.length; i++) {
+    total += freqBuf[i];
+    weighted += freqBuf[i] * i;
+    if (i > freqBuf.length*0.2 && i < freqBuf.length*0.5) mids += freqBuf[i];
+  }
+  const centroid = total ? (weighted / total) / freqBuf.length : 0;
+  const midEnergy = total ? mids / total : 0;
+  return { amp: ema, rms, centroid, midEnergy };
+}
+
+function loop() {
+  rafId = requestAnimationFrame(loop);
+  const { amp, rms, centroid, midEnergy } = analyseFrame();
+  if (getLipMode() === 'phoneme' && mouthsReady) {
+    drawShape(classifyShape(rms, centroid, midEnergy));
+  } else {
+    drawAmpMouth(amp);
+  }
+}
+
+async function fetchTTS() {
+  const text = document.getElementById('text').value.trim();
+  if (!text) throw new Error('请输入文字');
+  const ref = document.getElementById('ref').value.trim();
+  const voice = document.getElementById('voice').value;
+  const q = new URLSearchParams({ text, voice });
+  if (ref) q.set('reference_id', ref);
+  const resp = await fetch('/tts?' + q);
+  if (!resp.ok) throw new Error(await resp.text());
+  return {
+    blob: await resp.blob(),
+    backend: resp.headers.get('X-TTS-Backend') || 'unknown',
+  };
+}
+
+async function fast() {
+  btn.disabled = hqBtn.disabled = true;
+  hq.style.display = 'none';
+  eyes.style.display = 'block';
+  canvas.style.display = 'block';
+  setStatus('正在合成语音…'); showBadge('loading');
+  try {
+    const { blob, backend } = await fetchTTS();
+    audio.src = URL.createObjectURL(blob);
+    await new Promise((res, rej) => {
+      audio.onloadedmetadata = res;
+      audio.onerror = () => rej(new Error('音频解码失败'));
+    });
+    if (!audioCtx) startAnalysis();
+    await audioCtx.resume();
+    eyes.currentTime = 0;
+    await Promise.all([eyes.play(), audio.play()]);
+    showBadge('speaking · ' + backend + ' · ' + getLipMode());
+    setStatus(`实时播放中 (${backend}, ${getLipMode()} 模式)`);
+    loop();
+    audio.onended = () => {
+      stopAnalysis(); eyes.pause();
+      if (mouthsReady && getLipMode() === 'phoneme') drawShape('X');
+      showBadge('done · ' + backend); setStatus('播放结束');
+      btn.disabled = hqBtn.disabled = false;
+    };
+  } catch (e) {
+    setStatus('失败: ' + e.message, 'err'); showBadge('error','err');
+    btn.disabled = hqBtn.disabled = false;
+  }
+}
+
+async function hqRun() {
+  btn.disabled = hqBtn.disabled = true;
+  stopAnalysis();
+  setStatus('调用 Replicate Wav2Lip 中… (30-90s，不要关页面)', 'warn');
+  showBadge('replicate...', 'warn');
+  try {
+    const body = {
+      text: document.getElementById('text').value.trim(),
+      reference_id: document.getElementById('ref').value.trim() || null,
+      voice: document.getElementById('voice').value,
+    };
+    const resp = await fetch('/lipsync', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const blob = await resp.blob();
+    hq.src = URL.createObjectURL(blob);
+    eyes.style.display = 'none';
+    canvas.style.display = 'none';
+    hq.style.display = 'block';
+    await hq.play();
+    showBadge('HQ speaking · wav2lip');
+    setStatus('高精度唇形播放中');
+    hq.onended = () => {
+      showBadge('done · wav2lip'); setStatus('播放结束');
+      btn.disabled = hqBtn.disabled = false;
+    };
+  } catch (e) {
+    setStatus('高精度失败: ' + e.message, 'err'); showBadge('error','err');
+    eyes.style.display = 'block';
+    canvas.style.display = 'block';
+    hq.style.display = 'none';
+    btn.disabled = hqBtn.disabled = false;
+  }
+}
+
+btn.addEventListener('click', fast);
+hqBtn.addEventListener('click', hqRun);
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') fast();
+});
+
+/* ---- 背景切换 ----
+ * 用 unsplash 的免 key 关键字图（或内置占位）；支持上传自定义图。
+ */
+const PRESETS = {
+  apple: 'https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?w=1200&q=80',
+  cup:   'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=1200&q=80',
+  sky:   'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200&q=80',
+  none:  '',
+};
+function setBg(url) {
+  stage.style.backgroundImage = url ? `url("${url}")` : '';
+  stage.style.backgroundColor = url ? 'transparent' : '#0b0c11';
+}
+document.querySelectorAll('.bg-bar .preset').forEach(btn => {
+  btn.addEventListener('click', () => setBg(PRESETS[btn.dataset.bg]));
+});
+document.getElementById('bgUpload').addEventListener('change', (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => setBg(r.result);
+  r.readAsDataURL(f);
+});
+// 默认起个苹果背景，演示"苹果成精"效果
+setBg(PRESETS.apple);
+</script>
+</body>
+</html>

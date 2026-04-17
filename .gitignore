@@ -1,0 +1,18 @@
+# 环境变量 / 密钥
+.env
+
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 调试用中间图片
+cache/
+
+# uv / pip 虚拟环境
+.venv/
+venv/
+
+# 系统文件
+.DS_Store
+Thumbs.db
