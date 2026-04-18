@@ -1,14 +1,13 @@
 [project]
 name = "talking-mouth"
 version = "0.1.0"
-description = "Fish Audio TTS 驱动的透明眼睛/嘴巴说话视频 demo"
+description = "Cartesia Sonic TTS 驱动的透明眼睛/嘴巴说话视频 demo"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "requests>=2.32",
     "python-dotenv>=1.0",
-    "edge-tts>=7.0",
     "replicate>=1.0",
     "pillow>=11.0",
 ]

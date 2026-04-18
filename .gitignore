@@ -1,5 +1,6 @@
-# 环境变量 / 密钥
-.env
+# 仅忽略本地覆盖（可选）；`.env` 本身会提交到仓库，见下方说明
+.env.local
+.env.*.local
 
 # Python 编译缓存
 __pycache__/
@@ -12,6 +13,10 @@ cache/
 # uv / pip 虚拟环境
 .venv/
 venv/
+
+# 本地测试产物
+test_iflytek.mp3
+test_cartesia.mp3
 
 # 系统文件
 .DS_Store

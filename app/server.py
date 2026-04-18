@@ -1,7 +1,7 @@
 """FastAPI 服务器 —— 极简版。
 
 /            首页：参考视频作为脸 + 文字输入 + 立即播放 TTS
-/tts?text=   返回整段 TTS mp3（Fish Audio 优先，自动回落 edge-tts）
+/tts?text=   返回整段 TTS mp3（Cartesia Sonic，付费）
 /face.mp4    参考脸部动画视频（从 docs/videos 提供）
 """
 
@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import lipsync, tts
+from . import cartesia_tts, lipsync, tts
 
 
 load_dotenv()
@@ -65,15 +65,18 @@ def eyes_video():
 
 @app.get("/tts")
 def tts_endpoint(
-    text: str = Query(..., min_length=1, max_length=500),
-    reference_id: str | None = Query(None),
-    voice: str | None = Query(None, description="edge-tts 声音名"),
+    text: str = Query(..., min_length=1, max_length=2000),
+    voice_id: str | None = Query(None, description="Cartesia voice id"),
+    language: str | None = Query(None, description="zh / en / ja / ...", max_length=8),
+    model_id: str | None = Query(None, description="sonic-2 / sonic-3 等"),
 ):
     cfg = tts.TTSConfig.from_env()
-    if reference_id:
-        cfg.fish_reference_id = reference_id
-    if voice:
-        cfg.edge_voice = voice
+    if voice_id:
+        cfg.voice_id = voice_id
+    if language:
+        cfg.language = language
+    if model_id:
+        cfg.model_id = model_id
 
     try:
         audio, backend = tts.synthesize(text, cfg)
@@ -83,14 +86,30 @@ def tts_endpoint(
     return Response(
         content=audio,
         media_type="audio/mpeg",
-        headers={"X-TTS-Backend": backend},
+        headers={
+            "X-TTS-Backend": backend,
+            "X-TTS-Voice": cfg.voice_id,
+            "X-TTS-Lang": cfg.language,
+            "X-TTS-Model": cfg.model_id,
+        },
     )
 
 
+@app.get("/voices")
+def voices_endpoint():
+    """返回 Cartesia 精选发音人列表，给前端下拉框用。"""
+    return {
+        "voices": cartesia_tts.VOICE_POOL,
+        "default": cartesia_tts.DEFAULT_VOICE_ID,
+        "default_language": cartesia_tts.DEFAULT_LANGUAGE,
+        "default_model": cartesia_tts.DEFAULT_MODEL,
+    }
+
+
 class LipsyncRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=500)
-    reference_id: str | None = None
-    voice: str | None = None
+    text: str = Field(..., min_length=1, max_length=2000)
+    voice_id: str | None = None
+    language: str | None = None
 
 
 @app.post("/lipsync")
@@ -106,10 +125,10 @@ def lipsync_endpoint(req: LipsyncRequest):
         raise HTTPException(500, "face.mp4 不存在")
 
     cfg = tts.TTSConfig.from_env()
-    if req.reference_id:
-        cfg.fish_reference_id = req.reference_id
-    if req.voice:
-        cfg.edge_voice = req.voice
+    if req.voice_id:
+        cfg.voice_id = req.voice_id
+    if req.language:
+        cfg.language = req.language
 
     try:
         audio, backend = tts.synthesize(req.text, cfg)
@@ -132,7 +151,7 @@ def lipsync_endpoint(req: LipsyncRequest):
 def health() -> dict:
     return {
         "ok": True,
-        "fish_key_set": bool(os.getenv("FISH_API_KEY", "").strip()),
+        "cartesia_configured": bool(os.getenv("CARTESIA_API_KEY", "").strip()),
         "replicate_configured": lipsync.is_available(),
         "face_video_exists": FACE_VIDEO.exists(),
     }

@@ -1,1 +1,1 @@
-"""Talking-mouth overlay demo (Fish Audio TTS + 透明视频)。"""
+"""Talking-mouth overlay demo（Cartesia Sonic TTS + 透明视频）。"""

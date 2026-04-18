@@ -1,6 +1,6 @@
 # 会说话的脸 · Talking Face Demo
 
-输入一段中文 → Fish Audio / Edge TTS 合成语音 → 浏览器实时切换真实嘴型截图 PNG，叠在脸部视频上，像物体成精。
+输入一段中文 → **Cartesia Sonic TTS** 合成语音 → 浏览器实时切换真实嘴型截图 PNG，叠在脸部视频上，像物体成精。
 
 ---
 
@@ -20,19 +20,21 @@ cd C:\Learning\sample\synchronous-github\zingspark\hackathon
 uv sync
 ```
 
-### 第 2 步：配置 API Key（已预填，可跳过）
+### 第 2 步：配置 Cartesia API Key
 
-`.env` 已经有 Fish Audio key，直接用。若需修改：
+仓库根目录已提交 **`.env`**（方便 clone 即用），其中 `CARTESIA_API_KEY` 等为**占位符**，请按下面替换为你自己的 key：
 
-```powershell
-# 打开 .env 编辑即可
-notepad .env
-```
+1. 去 <https://play.cartesia.ai/keys> 创建 API Key
+2. 编辑 `.env`，把 `PASTE_YOUR_CARTESIA_API_KEY` 换成真实 key；需要高精度唇形时再填 `REPLICATE_API_TOKEN`
+
+**关于 GitHub 推送：**若把含真实 token 的 `.env` 再次 `commit` 并 `push`，GitHub **Push Protection** 通常会拒绝。协作时要么只在本机改 `.env` 不提交，要么使用占位符版本进仓库；切勿把生产密钥写进 Git 历史。
 
 | 变量 | 说明 | 是否必填 |
 |------|------|---------|
-| `FISH_API_KEY` | Fish Audio API key | 可选（没有会自动用免费 Edge TTS 兜底） |
-| `FISH_REFERENCE_ID` | 声音 ID（去 fish.audio 挑 funny 中文声音） | 可选 |
+| `CARTESIA_API_KEY` | Cartesia API Key（`sk_car_...`） | **必填** |
+| `CARTESIA_VOICE_ID` | 默认 voice id（见 <https://play.cartesia.ai/voices>） | 可选 |
+| `CARTESIA_LANGUAGE` | 默认语言 `zh / en / ja / fr / de / es / pt / ko / hi / it` | 可选，默认 `zh` |
+| `CARTESIA_MODEL` | 模型 `sonic-2 / sonic-3` | 可选，默认 `sonic-2` |
 | `REPLICATE_API_TOKEN` | Replicate token，用于高精度 Wav2Lip | 可选 |
 
 ### 第 3 步：启动服务
@@ -47,13 +49,10 @@ uv run uvicorn app.server:app --reload --port 8000
 
 ## 页面使用说明
 
-1. **要说的话**：输入中文文本，支持情感标签：
-   ```
-   [laughing] 哎呦你干嘛~ [excited] 这个苹果居然会说话！
-   ```
-2. **声音选择**：左侧 select 是 Edge TTS（免费，6 种趣味声音）；右侧填 `reference_id` 可用 Fish Audio 的梗声。
-3. **▶ 实时说话（免费）**：TTS 合成 → 浏览器实时切换嘴型 PNG，延迟 < 500 ms。
-4. **✨ 高精度唇形（Replicate）**：调用 Wav2Lip 神经网络合成，~30-90 秒，需要 `REPLICATE_API_TOKEN`。
+1. **要说的话**：输入文本，Sonic 系列是多语言模型，同一个 voice 可以切换语言发音
+2. **Cartesia voice / 语言**：下拉框切换发音人 id 和语言；想换音色去 <https://play.cartesia.ai/voices> 复制 voice id 到 `.env` 的 `CARTESIA_VOICE_ID`
+3. **▶ 实时说话（Cartesia Sonic）**：Cartesia `/tts/bytes` 端点返回 mp3 → 浏览器本地音素分析 → 切嘴型 PNG，延迟 < 500 ms
+4. **✨ 高精度唇形（Replicate）**：调用 Wav2Lip 神经网络合成，~30-90 秒，需要 `REPLICATE_API_TOKEN`
 
 ---
 
@@ -88,13 +87,15 @@ uv run uvicorn app.server:app --reload --port 8000
 ```
 浏览器输入文字
     │
-    ▼ GET /tts?text=...
+    ▼ GET /tts?text=...&voice_id=...&language=zh
 FastAPI (app/server.py)
     │
-    ├─ Fish Audio TTS REST → mp3
-    └─ edge-tts (fallback) → mp3
-         │
-         ▼ 返回 mp3 给浏览器
+    ▼
+Cartesia Sonic TTS（HTTP POST /tts/bytes）→ mp3
+    │ 网络抖动自动重试（SSL EOF / RST / read timeout）
+    ▼
+返回 mp3 给浏览器
+    │
 浏览器 AudioContext.AnalyserNode
     │ 每帧取 RMS + 频谱重心
     ▼
@@ -104,11 +105,24 @@ FastAPI (app/server.py)
 
 ---
 
+## 代码结构
+
+| 文件 | 职责 |
+|------|------|
+| `app/server.py` | FastAPI 路由：`/tts`、`/voices`、`/lipsync`、`/health` |
+| `app/cartesia_tts.py` | Cartesia HTTP TTS 客户端（`/tts/bytes` + 网络抖动自动重试） |
+| `app/tts.py` | TTS 统一入口（当前唯一后端 = Cartesia） |
+| `app/lipsync.py` | 调用 Replicate Wav2Lip |
+| `static/index.html` | 前端单页 |
+
+---
+
 ## 高精度模式（可选）
 
-`POST /lipsync` → Replicate Wav2Lip → 返回 mp4（约 $0.13 / 次）
+`POST /lipsync` → Cartesia TTS → Replicate Wav2Lip → 返回 mp4（约 $0.13 / 次）
 
 需要在 `.env` 填入：
+
 ```
 REPLICATE_API_TOKEN=你的token
 ```
@@ -119,4 +133,5 @@ REPLICATE_API_TOKEN=你的token
 
 - **换脸部视频**：替换 `docs/videos/制作说话的眼睛嘴巴视频.mp4`，然后重新跑 `static/mouths/README.md` 里的 ffmpeg 命令重新截取嘴型 PNG
 - **换背景图**：编辑 `static/index.html`，在 `.stage` 里加 `<img>` 作背景层
-- **换声音**：去 <https://fish.audio/zh-CN/>「发现」页面，挑有趣的中文声音，URL 末尾就是 `reference_id`
+- **换声音 / 克隆声音**：去 <https://play.cartesia.ai/voices> 浏览 voice library，或用 <https://play.cartesia.ai/> 录一段自己的声音克隆成 voice，复制 voice id 到 `.env` 的 `CARTESIA_VOICE_ID`
+- **切换模型**：`.env` 里设 `CARTESIA_MODEL=sonic-3` 换最新更自然的版本

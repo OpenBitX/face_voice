@@ -110,7 +110,7 @@
   <h1>🗣️ 会说话的脸 · Lip Sync Demo</h1>
   <p class="sub">
     眼睛视频 + 17 张真实嘴型 PNG → <code>mix-blend-mode: screen</code> 让黑色透明 → 贴在任意背景图上"物品成精"<br>
-    <b>A · 实时</b>：TTS + 本地音素分析 → 切嘴型 PNG，延迟 &lt;500ms；<b>B · 高精度</b>：Replicate Wav2Lip，~30-90s<br>
+    <b>A · 实时</b>：Cartesia Sonic TTS + 本地音素分析 → 切嘴型 PNG，延迟 &lt;500ms；<b>B · 高精度</b>：Replicate Wav2Lip，~30-90s<br>
     按 <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 触发快速模式
   </p>
 
@@ -139,19 +139,25 @@
 
     <div class="row">
       <div>
-        <label>Edge TTS 声音（Fish 无效时回落）</label>
+        <label>Cartesia 发音人（voice id）</label>
         <select id="voice">
-          <option value="zh-CN-YunxiNeural">云希 · 少年男声（活泼）</option>
-          <option value="zh-CN-YunyangNeural">云扬 · 热情男声</option>
-          <option value="zh-CN-XiaoyiNeural">晓伊 · 可爱女声</option>
-          <option value="zh-CN-XiaoxiaoNeural">晓晓 · 情感丰富</option>
-          <option value="zh-CN-liaoning-XiaobeiNeural">晓北 · 东北话 (funny)</option>
-          <option value="zh-CN-shaanxi-XiaoniNeural">晓妮 · 陕西话 (funny)</option>
+          <option value="f786b574-daa5-4673-aa0c-cbe3e8534c02">Sonic 默认（中文）</option>
         </select>
       </div>
       <div>
-        <label>Fish Audio reference_id（可选）</label>
-        <input id="ref" type="text" placeholder="去 fish.audio 复制一个声音 ID" />
+        <label>语言</label>
+        <select id="lang">
+          <option value="zh" selected>中文 zh</option>
+          <option value="en">English en</option>
+          <option value="ja">日本語 ja</option>
+          <option value="fr">Français fr</option>
+          <option value="de">Deutsch de</option>
+          <option value="es">Español es</option>
+          <option value="pt">Português pt</option>
+          <option value="ko">한국어 ko</option>
+          <option value="hi">हिन्दी hi</option>
+          <option value="it">Italiano it</option>
+        </select>
       </div>
     </div>
 
@@ -162,7 +168,7 @@
     </div>
 
     <div class="btns">
-      <button id="go"  class="btn-fast">▶ 实时说话（免费）</button>
+      <button id="go"  class="btn-fast">▶ 实时说话（Cartesia Sonic）</button>
       <button id="hqgo" class="btn-hq">✨ 高精度唇形（Replicate）</button>
     </div>
     <div id="status" class="status"></div>
@@ -355,13 +361,37 @@ function loop() {
   }
 }
 
+async function loadVoices() {
+  try {
+    const resp = await fetch('/voices');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const sel = document.getElementById('voice');
+    const langSel = document.getElementById('lang');
+    sel.innerHTML = '';
+    (data.voices || []).forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.voice_id;
+      opt.textContent = v.name;
+      if (v.voice_id === data.default && (v.language || 'zh') === (data.default_language || 'zh')) {
+        opt.selected = true;
+      }
+      opt.dataset.language = v.language || '';
+      sel.appendChild(opt);
+    });
+    if (data.default_language && langSel) {
+      langSel.value = data.default_language;
+    }
+  } catch { /* 忽略，继续用默认 option */ }
+}
+loadVoices();
+
 async function fetchTTS() {
   const text = document.getElementById('text').value.trim();
   if (!text) throw new Error('请输入文字');
-  const ref = document.getElementById('ref').value.trim();
-  const voice = document.getElementById('voice').value;
-  const q = new URLSearchParams({ text, voice });
-  if (ref) q.set('reference_id', ref);
+  const voice_id = document.getElementById('voice').value;
+  const language = document.getElementById('lang').value;
+  const q = new URLSearchParams({ text, voice_id, language });
   const resp = await fetch('/tts?' + q);
   if (!resp.ok) throw new Error(await resp.text());
   return {
@@ -410,8 +440,8 @@ async function hqRun() {
   try {
     const body = {
       text: document.getElementById('text').value.trim(),
-      reference_id: document.getElementById('ref').value.trim() || null,
-      voice: document.getElementById('voice').value,
+      voice_id: document.getElementById('voice').value,
+      language: document.getElementById('lang').value,
     };
     const resp = await fetch('/lipsync', {
       method: 'POST',
